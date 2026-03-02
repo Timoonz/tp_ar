@@ -23,13 +23,21 @@ import {
   RingGeometry,
   MeshBasicMaterial,
   Object3D,
-  Object3DEventMap
+  Object3DEventMap,
+  MeshStandardMaterial
 } from 'three';
 
-// XR Emulator
+import {
+  Body,
+  Box,
+  Plane,
+  Vec3,
+  World,
+  Material,
+  ContactMaterial,
+  Cylinder,
+} from 'cannon-es'
 
-
-// AR
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 
 // Example of hard link to official repo for data, if needed
@@ -37,7 +45,10 @@ import { ARButton } from 'three/addons/webxr/ARButton.js';
 
 let container;
 
-let camera: PerspectiveCamera, scene: Scene, renderer: WebGLRenderer;
+// ─── Caméra / scène / renderer ───────────────────────────────────────────────
+let camera: PerspectiveCamera;
+let scene: Scene;
+let renderer: WebGLRenderer;
 
 let reticle: Object3D<Object3DEventMap>;
 
@@ -49,7 +60,35 @@ let hitTestSourceRequested = false;
 const timer = new Timer();
 timer.connect(document);
 
-// Main loop
+//─── Monde physique ─────────────────────────────────────────────────────────────────────
+let physicsWorld = new World({
+  gravity: new Vec3(0, -9, 0),
+});
+
+// ─── Matériaux physiques ───────────────────────────────────────────────────────
+const floorPhysMaterial = new Material();
+
+
+const PLATFORM_DIM = 18;
+function createPlatform(width: number, height: number, depth: number) {
+  const platformMesh = new Mesh(
+    new BoxGeometry(width, height, depth),
+    new MeshStandardMaterial({ color: 0x7ec850, roughness: 0.9, metalness: 0.0 })
+  );
+  // platformMesh.position.set(x, y, z);
+  platformMesh.receiveShadow = true;
+  platformMesh.castShadow = true;
+  scene.add(platformMesh);
+
+  const platformBody = new Body({
+    type: Body.STATIC,
+    material: floorPhysMaterial,
+    shape: new Box(new Vec3(width / 2, height / 2, depth / 2)),
+  });
+  // platformBody.position.set(x, y, z);
+  physicsWorld.addBody(platformBody);
+}
+
 
 function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSource) => any; }) {
 
@@ -106,9 +145,7 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
 
   renderer.render(scene, camera);
 
-}
-
-
+};
 
 function init() {
 
@@ -123,8 +160,6 @@ function init() {
   light.position.set(0.5, 1, 0.25);
   scene.add(light);
 
-  //
-
   renderer = new WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -132,23 +167,25 @@ function init() {
   renderer.xr.enabled = true;
   container.appendChild(renderer.domElement);
 
-  //
-
   document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
 
-  //
 
   const geometry = new CylinderGeometry(0.1, 0.1, 0.2, 32).translate(0, 0.1, 0);
+
+
+
 
   function onSelect() {
 
     if (reticle.visible) {
 
-      const material = new MeshPhongMaterial({ color: 0xffffff * Math.random() });
-      const mesh = new Mesh(geometry, material);
-      reticle.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
-      mesh.scale.y = Math.random() * 2 + 1;
-      scene.add(mesh);
+      // const material = new MeshPhongMaterial({ color: 0xffffff * Math.random() });
+      // const mesh = new Mesh(geometry, material);
+      // reticle.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
+      // mesh.scale.y = Math.random() * 2 + 1;
+      // scene.add(mesh);
+
+      createPlatform(PLATFORM_DIM, 1, PLATFORM_DIM);
 
     }
 
@@ -170,11 +207,9 @@ function init() {
   reticle.visible = false;
   scene.add(reticle);
 
-  //
-
   window.addEventListener('resize', onWindowResize);
 
-}
+};
 
 init();
 
