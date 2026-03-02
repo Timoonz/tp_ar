@@ -69,7 +69,6 @@ let physicsWorld = new World({
 const floorPhysMaterial = new Material();
 
 
-const PLATFORM_DIM = 2;
 function createPlatform(width: number, height: number, depth: number) {
   const platformMesh = new Mesh(
     new BoxGeometry(width, height, depth),
@@ -186,7 +185,7 @@ function init() {
       // mesh.scale.y = Math.random() * 2 + 1;
       // scene.add(mesh);
 
-      const platformMesh = createPlatform(PLATFORM_DIM, 1, PLATFORM_DIM);
+      const platformMesh = createPlatform(1, 0.2, 1);
       reticle.matrix.decompose(platformMesh.position, platformMesh.quaternion, platformMesh.scale);
       scene.add(platformMesh);
       // Penser à mettre la physique du plateau à jour ?
