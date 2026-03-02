@@ -1,0 +1,24 @@
+{
+    "compilerOptions": {
+        "module": "es2022",
+        "target": "es2022",
+        "moduleResolution": "bundler",
+        "strict": true,
+        "sourceMap": true,
+        "baseUrl": "./",
+        "typeRoots": [
+            "node_modules/@types"
+        ],
+        "lib": [
+            "es2022",
+            "dom"
+        ]
+    },
+    "include": [
+        "**/*.ts",
+        "vite.config.js"
+    ],
+    "exclude": [
+        "node_modules"
+    ]
+}
