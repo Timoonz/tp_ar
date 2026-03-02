@@ -69,7 +69,7 @@ let physicsWorld = new World({
 const floorPhysMaterial = new Material();
 
 
-const PLATFORM_DIM = 18;
+const PLATFORM_DIM = 2;
 function createPlatform(width: number, height: number, depth: number) {
   const platformMesh = new Mesh(
     new BoxGeometry(width, height, depth),
@@ -78,7 +78,7 @@ function createPlatform(width: number, height: number, depth: number) {
   // platformMesh.position.set(x, y, z);
   platformMesh.receiveShadow = true;
   platformMesh.castShadow = true;
-  scene.add(platformMesh);
+  // scene.add(platformMesh);
 
   const platformBody = new Body({
     type: Body.STATIC,
@@ -87,6 +87,7 @@ function createPlatform(width: number, height: number, depth: number) {
   });
   // platformBody.position.set(x, y, z);
   physicsWorld.addBody(platformBody);
+  return platformMesh;
 }
 
 
@@ -185,8 +186,10 @@ function init() {
       // mesh.scale.y = Math.random() * 2 + 1;
       // scene.add(mesh);
 
-      createPlatform(PLATFORM_DIM, 1, PLATFORM_DIM);
-
+      const platformMesh = createPlatform(PLATFORM_DIM, 1, PLATFORM_DIM);
+      reticle.matrix.decompose(platformMesh.position, platformMesh.quaternion, platformMesh.scale);
+      scene.add(platformMesh);
+      // Penser à mettre la physique du plateau à jour ?
     }
 
   }
