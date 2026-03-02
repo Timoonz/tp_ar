@@ -4,7 +4,7 @@ import glsl from 'vite-plugin-glsl';
 import { injectIWER } from "@iwsdk/vite-plugin-iwer";
 
 export default defineConfig({
-    base: "/three_vite_xr_ts",
+    base: "tp_ar",
     clearScreen: false,
     optimizeDeps: {
         esbuildOptions: {
