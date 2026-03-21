@@ -103,6 +103,11 @@ const PIECES: Record<string, PieceConfig> = {
   },
 }
 
+let currentPiece: keyof typeof PIECES = 'cylinder';
+
+
+
+
 // ─── Helper: build Three.js geometry from config ──────────────────────────────
 function buildGeometry(config: PieceConfig): BufferGeometry {
   const s = config.size;
@@ -188,9 +193,12 @@ function onSelect() {
   }
 
   else if (GAME_STATE === 'play') {
-    const piece = createPiece(PIECES['cube']);
+    const keys = Object.keys(PIECES);
+    currentPiece = keys[Math.floor(Math.random() * keys.length)];
+    const piece = createPiece(PIECES[currentPiece]);
     const pieceMesh = piece.pieceMesh;
-    reticle.matrix.decompose(pieceMesh.position, pieceMesh.quaternion, pieceMesh.scale)
+    pieceMesh.matrix.decompose(pieceMesh.position, pieceMesh.quaternion, pieceMesh.scale)
+    scene.add(pieceMesh);
   }
 
 }
