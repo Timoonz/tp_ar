@@ -24,7 +24,7 @@ export default defineConfig({
     },
     server: {
         open: true,
-        allowedHosts: ['.trycloudflare.com']
+        allowedHosts: ['.trycloudflare.com', '.ngrok-free.dev']
     },
     plugins: [
         viteStaticCopy({
