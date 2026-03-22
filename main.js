@@ -1,113 +1,336 @@
 "use strict";
-// ⚠️ DO NOT EDIT main.js DIRECTLY ⚠️
-// This file is generated from the TypeScript source main.ts
-// Any changes made here will be overwritten.
-// Import only what you need, to help your bundler optimize final code size using tree shaking
-// see https://developer.mozilla.org/en-US/docs/Glossary/Tree_shaking)
-import { AmbientLight, Timer, CylinderGeometry, HemisphereLight, Mesh, MeshPhongMaterial, PerspectiveCamera, Scene, WebGLRenderer } from 'three';
-// XR
-import { XRButton } from 'three/addons/webxr/XRButton.js';
-// If you prefer to import the whole library, with the THREE prefix, use the following line instead:
-// import * as THREE from 'three'
-// NOTE: three/addons alias is supported by Rollup: you can use it interchangeably with three/examples/jsm/  
-// Importing Ammo can be tricky.
-// Vite supports webassembly: https://vitejs.dev/guide/features.html#webassembly
-// so in theory this should work:
-//
-// import ammoinit from 'three/addons/libs/ammo.wasm.js?init';
-// ammoinit().then((AmmoLib) => {
-//  Ammo = AmmoLib.exports.Ammo()
-// })
-//
-// But the Ammo lib bundled with the THREE js examples does not seem to export modules properly.
-// A solution is to treat this library as a standalone file and copy it using 'vite-plugin-static-copy'.
-// See vite.config.js
-// 
-// Consider using alternatives like Oimo or cannon-es
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { BoxGeometry, CylinderGeometry, HemisphereLight, Mesh, PerspectiveCamera, Scene, WebGLRenderer, RingGeometry, MeshBasicMaterial, MeshStandardMaterial, Vector3 } from 'three';
+import { Body, Box, Plane, Vec3, World, Material, ContactMaterial, Cylinder, } from 'cannon-es';
+import { ARButton } from 'three/addons/webxr/ARButton.js';
+import { SynthManager } from "./src/SynthManager";
 // Example of hard link to official repo for data, if needed
 // const MODEL_PATH = 'https://raw.githubusercontent.com/mrdoob/three.js/r173/examples/models/gltf/LeePerrySmith/LeePerrySmith.glb';
-// INSERT CODE HERE
-let camera, scene, renderer;
-const timer = new Timer();
-timer.connect(document);
-// Main loop
-const animate = () => {
-    timer.update();
-    const delta = timer.getDelta();
-    const elapsed = timer.getElapsed();
-    // can be used in shaders: uniforms.u_time.value = elapsed;
-    renderer.render(scene, camera);
+let container;
+// ─── Caméra / scène / renderer ───────────────────────────────────────────────
+let camera;
+let scene;
+let renderer;
+let reticle;
+let controller1, controller2;
+let hitTestSource = null;
+let hitTestSourceRequested = false;
+let lastTime = null;
+let GAME_STATE = 'init';
+// ─── Audio ───────────────────────────────────────────────
+const synthManager = new SynthManager();
+// Une histoire de contexte audio à remplacer pour zzfx
+const unlockAudio = () => {
+    const ctx = new AudioContext();
+    ctx.resume().then(() => ctx.close());
+    window.removeEventListener('click', unlockAudio);
+    window.removeEventListener('keydown', unlockAudio);
 };
-const init = () => {
+window.addEventListener('click', unlockAudio);
+window.addEventListener('keydown', unlockAudio);
+//─── Plateforme ─────────────────────────────────────────────────────────────────────
+let platformPosition = new Vector3();
+let platformTopY = 0;
+//─── Sol invisible ──────────────────────────────────────────────────────────────────
+let invisibleFloorBody = null;
+//─── Monde physique ─────────────────────────────────────────────────────────────────────
+let physicsWorld = new World({
+    gravity: new Vec3(0, -9, 0),
+});
+// ─── Matériaux physiques ───────────────────────────────────────────────────────
+const floorPhysMaterial = new Material('floor');
+const pieceMaterial = new Material('piece');
+// Friction/restitution entre les pièces et la plateforme
+const pieceFloorContact = new ContactMaterial(floorPhysMaterial, pieceMaterial, {
+    friction: 0.6,
+    restitution: 0.1,
+});
+physicsWorld.addContactMaterial(pieceFloorContact);
+// Friction/restitution entre les pièces
+const piecePieceContact = new ContactMaterial(pieceMaterial, pieceMaterial, {
+    friction: 0.6,
+    restitution: 0.05,
+});
+physicsWorld.addContactMaterial(piecePieceContact);
+const activePieces = [];
+//─── Gestion des débris ─────────────────────────────────────────────────────────────────────
+const DEBRIS_COUNT = 6;
+const DEBRIS_LIFETIME = 4;
+const FADE_START = DEBRIS_LIFETIME * 0.5;
+let piecesToBreak = [];
+let debris = [];
+const PIECES = {
+    cube: {
+        shape: 'cube',
+        size: 0.07,
+        mass: 1.0,
+    },
+    cylinder: {
+        shape: 'cylinder',
+        size: 0.07,
+        mass: 1.0,
+    },
+    cone: {
+        shape: 'cone',
+        size: 0.07,
+        mass: 1.0,
+    },
+    bigRect: {
+        shape: 'bigRect',
+        size: 0.07,
+        mass: 2.0,
+    },
+    thinRect: {
+        shape: 'thinRect',
+        size: 0.07,
+        mass: 0.8,
+    },
+};
+let currentPiece = 'cylinder';
+// ─── Helper: build Three.js geometry from config ──────────────────────────────
+function buildGeometry(config) {
+    const s = config.size;
+    switch (config.shape) {
+        case 'cube': return new BoxGeometry(s * 2, s * 2, s * 2);
+        case 'cylinder': return new CylinderGeometry(s, s, s * 2, 16);
+        case 'cone': return new CylinderGeometry(0, s, s * 2, 16);
+        case 'bigRect': return new BoxGeometry(s * 4, s * 1.5, s * 2);
+        case 'thinRect': return new BoxGeometry(s * 0.5, s * 3, s * 2);
+    }
+}
+;
+// ─── Helper: half-height of a piece (used to sit it on top of the platform) ──
+function pieceHalfHeight(config) {
+    const s = config.size;
+    switch (config.shape) {
+        case 'cube': return s;
+        case 'cylinder': return s;
+        case 'cone': return s;
+        case 'bigRect': return s * 0.75;
+        case 'thinRect': return s * 1.5;
+    }
+}
+// ─── Helper: build Cannon-ES shape from config ────────────────────────────────
+function buildPhysicsShape(config) {
+    const s = config.size;
+    switch (config.shape) {
+        case 'cube': return new Box(new Vec3(s, s, s));
+        case 'cylinder': return new Cylinder(s, s, s * 2, 16);
+        case 'cone': return new Cylinder(0.01, s, s * 2, 16); // cannon-es doesn't support radius 0
+        case 'bigRect': return new Box(new Vec3(s * 2, s * 0.75, s));
+        case 'thinRect': return new Box(new Vec3(s * 0.25, s * 1.5, s));
+    }
+}
+;
+// ─── Création de pièce ────
+function createPiece(config) {
+    const spawnY = platformTopY + pieceHalfHeight(config) + 0.4;
+    // mesh Three.js 
+    const pieceMesh = new Mesh(buildGeometry(config), new MeshStandardMaterial({ color: 0x8e44ad }));
+    pieceMesh.castShadow = true;
+    pieceMesh.position.set(platformPosition.x, spawnY, platformPosition.z);
+    scene.add(pieceMesh);
+    // bidy Cannon-ES 
+    const physBody = new Body({
+        mass: config.mass,
+        type: Body.DYNAMIC,
+        material: pieceMaterial,
+        shape: buildPhysicsShape(config),
+        linearDamping: 0.1,
+        angularDamping: 0.1,
+    });
+    physBody.position.set(platformPosition.x, spawnY, platformPosition.z);
+    physicsWorld.addBody(physBody);
+    const piece = { pieceMesh, physBody };
+    physBody.addEventListener('collide', (event) => {
+        if (event.body === invisibleFloorBody && !piecesToBreak.includes(piece)) {
+            synthManager.play('blockDestruction');
+            piecesToBreak.push(piece);
+        }
+        else {
+            synthManager.play('blockHit');
+        }
+    });
+    activePieces.push(piece);
+    return piece;
+}
+// ─── Cassage de pièce ────
+function breakPiece(piece) {
+    const pos = piece.physBody.position;
+    const vel = piece.physBody.velocity;
+    const color = piece.pieceMesh.material.color.getHex();
+    scene.remove(piece.pieceMesh);
+    physicsWorld.removeBody(piece.physBody);
+    for (let i = 0; i < DEBRIS_COUNT; i++) {
+        const fragSize = (0.01 + Math.random() * 0.02); // échelle AR : ~1–3 cm
+        const fragMesh = new Mesh(new BoxGeometry(fragSize * 2, fragSize * 2, fragSize * 2), new MeshStandardMaterial({ color, roughness: 1.0, transparent: true, opacity: 1.0 }));
+        scene.add(fragMesh);
+        const fragBody = new Body({
+            mass: 0.05,
+            shape: new Box(new Vec3(fragSize, fragSize, fragSize)),
+            linearDamping: 0.4,
+            angularDamping: 0.4,
+        });
+        fragBody.position.set(pos.x + (Math.random() - 0.5) * 0.06, pos.y + (Math.random() - 0.5) * 0.03, pos.z + (Math.random() - 0.5) * 0.06);
+        const spread = 0.15;
+        fragBody.velocity.set(vel.x * 0.3 + (Math.random() - 0.5) * spread, Math.random() * 0.1, vel.z * 0.3 + (Math.random() - 0.5) * spread);
+        fragBody.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12);
+        physicsWorld.addBody(fragBody);
+        debris.push({ mesh: fragMesh, body: fragBody, spawnTime: performance.now() / 1000 });
+    }
+}
+;
+// ─── Création de la plateforme ────
+function createPlatform(width, height, depth) {
+    const platformMesh = new Mesh(new BoxGeometry(width, height, depth), new MeshStandardMaterial({ color: 0x7ec850, roughness: 0.9, metalness: 0.0 }));
+    platformMesh.receiveShadow = true;
+    platformMesh.castShadow = true;
+    const platformBody = new Body({
+        type: Body.STATIC,
+        material: floorPhysMaterial,
+        shape: new Box(new Vec3(width / 2, height / 2, depth / 2)),
+    });
+    physicsWorld.addBody(platformBody);
+    platformMesh.__physBody = platformBody;
+    return platformMesh;
+}
+;
+function onSelect() {
+    if (reticle.visible && GAME_STATE == 'init') {
+        const PLATFORM_HEIGHT = 0.1;
+        const platformMesh = createPlatform(1, PLATFORM_HEIGHT, 1);
+        reticle.matrix.decompose(platformMesh.position, platformMesh.quaternion, platformMesh.scale);
+        scene.add(platformMesh);
+        const body = platformMesh.__physBody;
+        body.position.set(platformMesh.position.x, platformMesh.position.y, platformMesh.position.z);
+        body.quaternion.set(platformMesh.quaternion.x, platformMesh.quaternion.y, platformMesh.quaternion.z, platformMesh.quaternion.w);
+        platformPosition.copy(platformMesh.position);
+        platformTopY = platformMesh.position.y + PLATFORM_HEIGHT / 2;
+        // Sol invisible : placé 0.5 m sous la plateforme pour rattraper les pièces qui tombent
+        const FLOOR_OFFSET = 0.5;
+        invisibleFloorBody = new Body({
+            type: Body.STATIC,
+            material: floorPhysMaterial,
+            shape: new Plane(),
+        });
+        invisibleFloorBody.position.set(platformMesh.position.x, platformMesh.position.y - FLOOR_OFFSET, platformMesh.position.z);
+        // Plane est orienté vers le haut par défaut avec Cannon-ES (normale = +Y)
+        invisibleFloorBody.quaternion.setFromAxisAngle(new Vec3(1, 0, 0), -Math.PI / 2);
+        physicsWorld.addBody(invisibleFloorBody);
+        GAME_STATE = 'play';
+        scene.remove(reticle);
+    }
+    else if (GAME_STATE == 'play') {
+        const keys = Object.keys(PIECES);
+        currentPiece = keys[Math.floor(Math.random() * keys.length)];
+        createPiece(PIECES[currentPiece]);
+    }
+}
+;
+function init() {
+    container = document.createElement('div');
+    document.body.appendChild(container);
     scene = new Scene();
-    const aspect = window.innerWidth / window.innerHeight;
-    camera = new PerspectiveCamera(75, aspect, 0.1, 10); // meters
-    camera.position.set(0, 1.6, 3);
-    const light = new AmbientLight(0xffffff, 1.0); // soft white light
+    camera = new PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+    const light = new HemisphereLight(0xffffff, 0xbbbbff, 3);
+    light.position.set(0.5, 1, 0.25);
     scene.add(light);
-    const hemiLight = new HemisphereLight(0xffffff, 0xbbbbff, 3);
-    hemiLight.position.set(0.5, 1, 0.25);
-    scene.add(hemiLight);
     renderer = new WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setAnimationLoop(animate); // requestAnimationFrame() replacement, compatible with XR 
+    renderer.setAnimationLoop(animate);
     renderer.xr.enabled = true;
-    document.body.appendChild(renderer.domElement);
-    /*
-    document.body.appendChild( XRButton.createButton( renderer, {
-      'optionalFeatures': [ 'depth-sensing' ],
-      'depthSensing': { 'usagePreference': [ 'gpu-optimized' ], 'dataFormatPreference': [] }
-    } ) );
-  */
-    const xrButton = XRButton.createButton(renderer, {});
-    xrButton.style.backgroundColor = 'skyblue';
-    document.body.appendChild(xrButton);
-    const controls = new OrbitControls(camera, renderer.domElement);
-    //controls.listenToKeyEvents(window); // optional
-    controls.target.set(0, 1.6, 0);
-    controls.update();
-    // Handle input: see THREE.js webxr_ar_cones
-    const geometry = new CylinderGeometry(0, 0.05, 0.2, 32).rotateX(Math.PI / 2);
-    const onSelect = (event) => {
-        const material = new MeshPhongMaterial({ color: 0xffffff * Math.random() });
-        const mesh = new Mesh(geometry, material);
-        mesh.position.set(0, 0, -0.3).applyMatrix4(controller.matrixWorld);
-        mesh.quaternion.setFromRotationMatrix(controller.matrixWorld);
-        scene.add(mesh);
-    };
-    const controller = renderer.xr.getController(0);
-    controller.addEventListener('select', onSelect);
-    scene.add(controller);
-    window.addEventListener('resize', onWindowResize, false);
-};
+    container.appendChild(renderer.domElement);
+    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
+    const geometry = new CylinderGeometry(0.1, 0.1, 0.2, 32).translate(0, 0.1, 0);
+    controller1 = renderer.xr.getController(0);
+    controller1.addEventListener('select', onSelect);
+    scene.add(controller1);
+    controller2 = renderer.xr.getController(1);
+    controller2.addEventListener('select', onSelect);
+    scene.add(controller2);
+    reticle = new Mesh(new RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2), new MeshBasicMaterial());
+    reticle.matrixAutoUpdate = false;
+    reticle.visible = false;
+    scene.add(reticle);
+    window.addEventListener('resize', onWindowResize);
+}
+;
+function animate(_timestamp, frame) {
+    if (frame) {
+        const referenceSpace = renderer.xr.getReferenceSpace();
+        const session = renderer.xr.getSession();
+        if (hitTestSourceRequested === false) {
+            if (session) {
+                session.requestReferenceSpace('viewer').then(function (referenceSpace) {
+                    session.requestHitTestSource?.({ space: referenceSpace })?.then(function (source) {
+                        hitTestSource = source;
+                    });
+                });
+                session.addEventListener('end', function () {
+                    hitTestSourceRequested = false;
+                    hitTestSource = null;
+                });
+                hitTestSourceRequested = true;
+            }
+        }
+        if (GAME_STATE == "init") {
+            if (hitTestSource) {
+                const hitTestResults = frame.getHitTestResults(hitTestSource);
+                if (hitTestResults.length) {
+                    const hit = hitTestResults[0];
+                    reticle.visible = true;
+                    reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
+                }
+                else {
+                    reticle.visible = false;
+                }
+            }
+        }
+        if (GAME_STATE === 'play') {
+            const now = performance.now();
+            if (lastTime === null) {
+                lastTime = now;
+            }
+            const delta = Math.min((now - lastTime) / 1000, 0.05);
+            lastTime = now;
+            physicsWorld.step(1 / 60, delta, 3);
+            // Sync Three.js meshes to Cannon-ES bodies
+            for (const { pieceMesh, physBody } of activePieces) {
+                pieceMesh.position.set(physBody.position.x, physBody.position.y, physBody.position.z);
+                pieceMesh.quaternion.set(physBody.quaternion.x, physBody.quaternion.y, physBody.quaternion.z, physBody.quaternion.w);
+            }
+            if (piecesToBreak.length > 0) {
+                piecesToBreak.forEach(piece => {
+                    const idx = activePieces.indexOf(piece);
+                    if (idx !== -1)
+                        activePieces.splice(idx, 1);
+                    breakPiece(piece);
+                });
+                piecesToBreak = [];
+            }
+            // Mise à jour et nettoyage des débris
+            const currentTimeSec = performance.now() / 1000;
+            debris = debris.filter(({ mesh, body, spawnTime }) => {
+                const age = currentTimeSec - spawnTime;
+                if (age >= DEBRIS_LIFETIME) {
+                    scene.remove(mesh);
+                    physicsWorld.removeBody(body);
+                    return false;
+                }
+                mesh.position.set(body.position.x, body.position.y, body.position.z);
+                mesh.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+                if (age > FADE_START) {
+                    const opacity = 1 - (age - FADE_START) / (DEBRIS_LIFETIME - FADE_START);
+                    mesh.material.opacity = opacity;
+                }
+                return true;
+            });
+        }
+    }
+    renderer.render(scene, camera);
+}
+;
 init();
-//
-/*
-function loadData() {
-  new GLTFLoader()
-    .setPath('assets/models/')
-    .load('test.glb', gltfReader);
-}
-
-
-function gltfReader(gltf) {
-  let testModel = null;
-
-  testModel = gltf.scene;
-
-  if (testModel != null) {
-    console.log("Model loaded:  " + testModel);
-    scene.add(gltf.scene);
-  } else {
-    console.log("Load FAILED.  ");
-  }
-}
-
-loadData();
-*/
-// camera.position.z = 3;
 function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();

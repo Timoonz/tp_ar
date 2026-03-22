@@ -36,6 +36,8 @@ import {
 
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 
+import { SynthManager } from "./src/SynthManager";
+
 // Example of hard link to official repo for data, if needed
 // const MODEL_PATH = 'https://raw.githubusercontent.com/mrdoob/three.js/r173/examples/models/gltf/LeePerrySmith/LeePerrySmith.glb';
 
@@ -56,6 +58,19 @@ let hitTestSourceRequested = false;
 let lastTime: number | null = null;
 
 let GAME_STATE = 'init';
+
+// ─── Audio ───────────────────────────────────────────────
+const synthManager = new SynthManager();
+
+// Une histoire de contexte audio à remplacer pour zzfx
+const unlockAudio = () => {
+  const ctx = new AudioContext();
+  ctx.resume().then(() => ctx.close());
+  window.removeEventListener('click', unlockAudio);
+  window.removeEventListener('keydown', unlockAudio);
+};
+window.addEventListener('click', unlockAudio);
+window.addEventListener('keydown', unlockAudio);
 
 //─── Plateforme ─────────────────────────────────────────────────────────────────────
 let platformPosition = new Vector3();
@@ -216,7 +231,11 @@ function createPiece(config: PieceConfig): Piece {
 
   physBody.addEventListener('collide', (event: any) => {
     if (event.body === invisibleFloorBody && !piecesToBreak.includes(piece)) {
-      piecesToBreak.push(piece);
+      synthManager.play('blockDestruction');
+      piecesToBreak.push(piece)
+    }
+    else {
+      synthManager.play('blockHit');
     }
   });
 
