@@ -19,7 +19,8 @@ import {
   Object3DEventMap,
   MeshStandardMaterial,
   BufferGeometry,
-  Group
+  Group,
+  Vector3
 } from 'three';
 
 import {
@@ -57,13 +58,41 @@ timer.connect(document);
 
 let GAME_STATE = 'init';
 
+//─── Plateforme ─────────────────────────────────────────────────────────────────────
+let platformPosition = new Vector3();
+let platformTopY = 0;
+
+
 //─── Monde physique ─────────────────────────────────────────────────────────────────────
 let physicsWorld = new World({
   gravity: new Vec3(0, -9, 0),
 });
 
 // ─── Matériaux physiques ───────────────────────────────────────────────────────
-const floorPhysMaterial = new Material();
+const floorPhysMaterial = new Material('floor');
+const pieceMaterial = new Material('piece');
+
+// Friction/restitution entre les pièces et la plateforme
+const pieceFloorContact = new ContactMaterial(floorPhysMaterial, pieceMaterial, {
+  friction: 0.6,
+  restitution: 0.1,
+});
+physicsWorld.addContactMaterial(pieceFloorContact);
+
+// Friction/restitution entre les pièces
+const piecePieceContact = new ContactMaterial(pieceMaterial, pieceMaterial, {
+  friction: 0.6,
+  restitution: 0.05,
+});
+physicsWorld.addContactMaterial(piecePieceContact);
+
+//─── Pièces actives ─────────────────────────────────────────────────────────────────────
+interface Piece {
+  pieceMesh: Mesh;
+  physBody: Body;
+}
+
+const activePieces: Piece[] = [];
 
 //─── Pièces ─────────────────────────────────────────────────────────────────────
 
@@ -106,8 +135,6 @@ const PIECES: Record<string, PieceConfig> = {
 let currentPiece: keyof typeof PIECES = 'cylinder';
 
 
-
-
 // ─── Helper: build Three.js geometry from config ──────────────────────────────
 function buildGeometry(config: PieceConfig): BufferGeometry {
   const s = config.size;
@@ -119,6 +146,18 @@ function buildGeometry(config: PieceConfig): BufferGeometry {
     case 'thinRect': return new BoxGeometry(s * 0.5, s * 3, s * 2);
   }
 };
+
+// ─── Helper: half-height of a piece (used to sit it on top of the platform) ──
+function pieceHalfHeight(config: PieceConfig): number {
+  const s = config.size;
+  switch (config.shape) {
+    case 'cube': return s;
+    case 'cylinder': return s;
+    case 'cone': return s;
+    case 'bigRect': return s * 0.75;
+    case 'thinRect': return s * 1.5;
+  }
+}
 
 // ─── Helper: build Cannon-ES shape from config ────────────────────────────────
 function buildPhysicsShape(config: PieceConfig) {
@@ -132,73 +171,90 @@ function buildPhysicsShape(config: PieceConfig) {
   }
 };
 
-function createPiece(config: PieceConfig) {
-  // côté Three.js 
-  const pieceMesh = new Mesh(buildGeometry(config), new MeshStandardMaterial({ color: 0x8e44ad }));
+
+function createPiece(config: PieceConfig): Piece {
+  const spawnY = platformTopY + pieceHalfHeight(config) + 0.05; // small gap so it falls onto the surface
+
+  // mesh Three.js 
+  const pieceMesh = new Mesh(
+    buildGeometry(config),
+    new MeshStandardMaterial({ color: 0x8e44ad })
+  );
   pieceMesh.castShadow = true;
+  pieceMesh.position.set(platformPosition.x, spawnY, platformPosition.z);
   scene.add(pieceMesh);
 
-  // côté Cannon-ES 
-  const physMat = new Material();
+  // bidy Cannon-ES 
   const physBody = new Body({
     mass: config.mass,
-    type: Body.KINEMATIC, // Ne bouge pas tant qu'elle n'est pas "réveillée"
-    material: physMat,
+    type: Body.DYNAMIC,
+    material: pieceMaterial,
     shape: buildPhysicsShape(config),
-    sleepTimeLimit: 0.1,
+    linearDamping: 0.1,
+    angularDamping: 0.1,
   });
-
-
+  physBody.position.set(platformPosition.x, spawnY, platformPosition.z);
   physicsWorld.addBody(physBody);
 
-  // Contact: pièce ↔ sol
-
-  const piece = { pieceMesh, physBody, physMat };
-
+  const piece: Piece = { pieceMesh, physBody };
+  activePieces.push(piece);
   return piece;
 }
 
-
-function createPlatform(width: number, height: number, depth: number) {
+// ─── Création de la plateforme ────
+function createPlatform(width: number, height: number, depth: number): Mesh {
   const platformMesh = new Mesh(
     new BoxGeometry(width, height, depth),
     new MeshStandardMaterial({ color: 0x7ec850, roughness: 0.9, metalness: 0.0 })
   );
-  // platformMesh.position.set(x, y, z);
   platformMesh.receiveShadow = true;
   platformMesh.castShadow = true;
-  // scene.add(platformMesh);
 
   const platformBody = new Body({
     type: Body.STATIC,
     material: floorPhysMaterial,
     shape: new Box(new Vec3(width / 2, height / 2, depth / 2)),
   });
-  // platformBody.position.set(x, y, z);
-  physicsWorld.addBody(platformBody);
-  return platformMesh;
-};
 
+  physicsWorld.addBody(platformBody);
+
+  (platformMesh as any).__physBody = platformBody;
+
+  return platformMesh;
+}
 
 function onSelect() {
 
-  if (reticle.visible && GAME_STATE === 'init') {
+  if (reticle.visible && GAME_STATE == 'init') {
 
-    const platformMesh = createPlatform(1, 0.1, 1);
+    const PLATFORM_HEIGHT = 0.1;
+    const platformMesh = createPlatform(1, PLATFORM_HEIGHT, 1);
+
     reticle.matrix.decompose(platformMesh.position, platformMesh.quaternion, platformMesh.scale);
     scene.add(platformMesh);
-    // Penser à mettre la physique du plateau à jour ?
+
+    const body: Body = (platformMesh as any).__physBody;
+    body.position.set(platformMesh.position.x, platformMesh.position.y, platformMesh.position.z);
+    body.quaternion.set(
+      platformMesh.quaternion.x,
+      platformMesh.quaternion.y,
+      platformMesh.quaternion.z,
+      platformMesh.quaternion.w
+    );
+
+    platformPosition.copy(platformMesh.position);
+    platformTopY = platformMesh.position.y + PLATFORM_HEIGHT / 2;
+
+
+
     GAME_STATE = 'play';
     scene.remove(reticle);
   }
 
-  else if (GAME_STATE === 'play') {
+  else if (GAME_STATE == 'play') {
     const keys = Object.keys(PIECES);
     currentPiece = keys[Math.floor(Math.random() * keys.length)];
-    const piece = createPiece(PIECES[currentPiece]);
-    const pieceMesh = piece.pieceMesh;
-    pieceMesh.matrix.decompose(pieceMesh.position, pieceMesh.quaternion, pieceMesh.scale)
-    scene.add(pieceMesh);
+    createPiece(PIECES[currentPiece]);
   }
 
 }
@@ -285,21 +341,34 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
         const hitTestResults = frame.getHitTestResults(hitTestSource);
 
         if (hitTestResults.length) {
-
           const hit = hitTestResults[0];
-
           reticle.visible = true;
           reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
-
         } else {
-
           reticle.visible = false;
-
         }
-
       }
     }
 
+    if (GAME_STATE === 'play') {
+      const delta = Math.min(timer.getDelta(), 0.05); // cap to avoid spiral of death
+      physicsWorld.step(1 / 60, delta, 3);
+
+      // Sync Three.js meshes to Cannon-ES bodies
+      for (const { pieceMesh, physBody } of activePieces) {
+        pieceMesh.position.set(
+          physBody.position.x,
+          physBody.position.y,
+          physBody.position.z
+        );
+        pieceMesh.quaternion.set(
+          physBody.quaternion.x,
+          physBody.quaternion.y,
+          physBody.quaternion.z,
+          physBody.quaternion.w
+        );
+      }
+    }
 
   }
 
@@ -312,10 +381,8 @@ init();
 
 
 function onWindowResize() {
-
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
-
   renderer.setSize(window.innerWidth, window.innerHeight);
 
 }
