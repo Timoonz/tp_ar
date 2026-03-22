@@ -38,6 +38,9 @@ import { ARButton } from 'three/addons/webxr/ARButton.js';
 
 import { SynthManager } from "./src/SynthManager";
 
+// Example of hard link to official repo for data, if needed
+// const MODEL_PATH = 'https://raw.githubusercontent.com/mrdoob/three.js/r173/examples/models/gltf/LeePerrySmith/LeePerrySmith.glb';
+
 let container;
 
 // ─── Caméra / scène / renderer ───────────────────────────────────────────────
@@ -59,90 +62,20 @@ let GAME_STATE = 'init';
 // ─── Audio ───────────────────────────────────────────────
 const synthManager = new SynthManager();
 
+// Une histoire de contexte audio à remplacer pour zzfx
 let audioUnlocked = false;
-
-// ─── Spatialisation audio ─────────────────────────────────────────────────────
-
-/**
- * Returns zzfx's AudioContext (zzfxX), waiting until zzfx has created it.
- * We must never create a second AudioContext — the panner and the zzfx gain
- * node must live in the same context or the routing has no effect.
- */
-function getZzfxContext(): AudioContext | null {
-  return (window as any).zzfxX as AudioContext | null ?? null;
-}
-
-/**
- * Creates a PannerNode in zzfx's AudioContext, positioned at the given world
- * coordinates, connected to ctx.destination.
- * Returns null if the context isn't ready yet.
- */
-function createPannerAt(position: { x: number; y: number; z: number }): PannerNode | null {
-  const ctx = getZzfxContext();
-  if (!ctx) return null;
-
-  const panner = ctx.createPanner();
-  panner.panningModel = 'HRTF';
-  panner.distanceModel = 'inverse';
-  panner.refDistance = 0.5;   // ~50 cm reference distance, appropriate for AR tabletop scale
-  panner.maxDistance = 10;
-  panner.rolloffFactor = 1.5;
-  panner.coneInnerAngle = 360; // omnidirectional source
-  panner.coneOuterAngle = 360;
-  panner.coneOuterGain = 0;
-
-  panner.positionX.setValueAtTime(position.x, ctx.currentTime);
-  panner.positionY.setValueAtTime(position.y, ctx.currentTime);
-  panner.positionZ.setValueAtTime(position.z, ctx.currentTime);
-
-  panner.connect(ctx.destination);
-  return panner;
-}
-
-/**
- * Syncs the AudioListener position and orientation to the camera every frame.
- * Must be called in the render loop after the XR camera has been updated.
- */
-function updateAudioListener(): void {
-  const ctx = getZzfxContext();
-  if (!ctx) return;
-
-  const listener = ctx.listener;
-
-  const pos = new Vector3();
-  camera.getWorldPosition(pos);
-
-  const forward = new Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-  const up = new Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
-
-  if (listener.positionX) {
-    // Modern API
-    const t = ctx.currentTime;
-    listener.positionX.setValueAtTime(pos.x, t);
-    listener.positionY.setValueAtTime(pos.y, t);
-    listener.positionZ.setValueAtTime(pos.z, t);
-    listener.forwardX.setValueAtTime(forward.x, t);
-    listener.forwardY.setValueAtTime(forward.y, t);
-    listener.forwardZ.setValueAtTime(forward.z, t);
-    listener.upX.setValueAtTime(up.x, t);
-    listener.upY.setValueAtTime(up.y, t);
-    listener.upZ.setValueAtTime(up.z, t);
-  } else {
-    // Legacy fallback
-    (listener as any).setPosition(pos.x, pos.y, pos.z);
-    (listener as any).setOrientation(forward.x, forward.y, forward.z, up.x, up.y, up.z);
-  }
-}
 
 function unlockAudio() {
   if (audioUnlocked) return;
   audioUnlocked = true;
 
+  // Résume le contexte interne de zzfx s'il existe déjà
   const zzfxCtx = (window as any).zzfxX as AudioContext | undefined;
   if (zzfxCtx && zzfxCtx.state === 'suspended') {
     zzfxCtx.resume();
   }
 
+  // Crée un contexte temporaire pour lever le blocage navigateur sur mobile
   try {
     const ctx = new AudioContext();
     ctx.resume().then(() => ctx.close());
@@ -169,12 +102,14 @@ let physicsWorld = new World({
 const floorPhysMaterial = new Material('floor');
 const pieceMaterial = new Material('piece');
 
+// Friction/restitution entre les pièces et la plateforme
 const pieceFloorContact = new ContactMaterial(floorPhysMaterial, pieceMaterial, {
   friction: 0.6,
   restitution: 0.1,
 });
 physicsWorld.addContactMaterial(pieceFloorContact);
 
+// Friction/restitution entre les pièces
 const piecePieceContact = new ContactMaterial(pieceMaterial, pieceMaterial, {
   friction: 0.6,
   restitution: 0.05,
@@ -216,14 +151,35 @@ interface PieceConfig {
 }
 
 const PIECES: Record<string, PieceConfig> = {
-  cube: { shape: 'cube', size: 0.07, mass: 1.0 },
-  cylinder: { shape: 'cylinder', size: 0.07, mass: 1.0 },
-  cone: { shape: 'cone', size: 0.07, mass: 1.0 },
-  bigRect: { shape: 'bigRect', size: 0.07, mass: 2.0 },
-  thinRect: { shape: 'thinRect', size: 0.07, mass: 0.8 },
+  cube: {
+    shape: 'cube',
+    size: 0.07,
+    mass: 1.0,
+  },
+  cylinder: {
+    shape: 'cylinder',
+    size: 0.07,
+    mass: 1.0,
+  },
+  cone: {
+    shape: 'cone',
+    size: 0.07,
+    mass: 1.0,
+  },
+  bigRect: {
+    shape: 'bigRect',
+    size: 0.07,
+    mass: 2.0,
+  },
+  thinRect: {
+    shape: 'thinRect',
+    size: 0.07,
+    mass: 0.8,
+  },
 }
 
 let currentPiece: keyof typeof PIECES = 'cylinder';
+
 
 // ─── Helper: build Three.js geometry from config ──────────────────────────────
 function buildGeometry(config: PieceConfig): BufferGeometry {
@@ -255,16 +211,17 @@ function buildPhysicsShape(config: PieceConfig) {
   switch (config.shape) {
     case 'cube': return new Box(new Vec3(s, s, s));
     case 'cylinder': return new Cylinder(s, s, s * 2, 16);
-    case 'cone': return new Cylinder(0.01, s, s * 2, 16);
+    case 'cone': return new Cylinder(0.01, s, s * 2, 16); // cannon-es doesn't support radius 0
     case 'bigRect': return new Box(new Vec3(s * 2, s * 0.75, s));
     case 'thinRect': return new Box(new Vec3(s * 0.25, s * 1.5, s));
   }
 };
 
-// ─── Création de pièce ────────────────────────────────────────────────────────
+// ─── Création de pièce ────
 function createPiece(config: PieceConfig): Piece {
   const spawnY = platformTopY + pieceHalfHeight(config) + 0.4;
 
+  // mesh Three.js 
   const pieceMesh = new Mesh(
     buildGeometry(config),
     new MeshStandardMaterial({ color: 0x8e44ad })
@@ -273,6 +230,7 @@ function createPiece(config: PieceConfig): Piece {
   pieceMesh.position.set(platformPosition.x, spawnY, platformPosition.z);
   scene.add(pieceMesh);
 
+  // bidy Cannon-ES 
   const physBody = new Body({
     mass: config.mass,
     type: Body.DYNAMIC,
@@ -287,32 +245,13 @@ function createPiece(config: PieceConfig): Piece {
   const piece: Piece = { pieceMesh, physBody, hasLanded: false };
 
   physBody.addEventListener('collide', (event: any) => {
-    // Snapshot position at the moment of collision
-    const collisionPos = {
-      x: physBody.position.x,
-      y: physBody.position.y,
-      z: physBody.position.z,
-    };
-
     if (event.body === invisibleFloorBody && !piecesToBreak.includes(piece)) {
-      // Destruction sound spatialized from the piece's world position
-      const panner = createPannerAt(collisionPos);
-      if (panner) {
-        synthManager.playSpatialized('blockDestruction', panner);
-      } else {
-        synthManager.play('blockDestruction'); // fallback if ctx not ready
-      }
-      piecesToBreak.push(piece);
-
-    } else if (!piece.hasLanded) {
+      synthManager.play('blockDestruction');
+      piecesToBreak.push(piece)
+    }
+    else if (!piece.hasLanded) {
       piece.hasLanded = true;
-      // Landing sound spatialized from the piece's world position
-      const panner = createPannerAt(collisionPos);
-      if (panner) {
-        synthManager.playSpatialized('blockHit', panner);
-      } else {
-        synthManager.play('blockHit'); // fallback if ctx not ready
-      }
+      synthManager.play('blockHit');
     }
   });
 
@@ -320,7 +259,7 @@ function createPiece(config: PieceConfig): Piece {
   return piece;
 }
 
-// ─── Cassage de pièce ─────────────────────────────────────────────────────────
+// ─── Cassage de pièce ────
 function breakPiece(piece: Piece) {
   const pos = piece.physBody.position;
   const vel = piece.physBody.velocity;
@@ -330,7 +269,7 @@ function breakPiece(piece: Piece) {
   physicsWorld.removeBody(piece.physBody);
 
   for (let i = 0; i < DEBRIS_COUNT; i++) {
-    const fragSize = (0.01 + Math.random() * 0.02);
+    const fragSize = (0.01 + Math.random() * 0.02); // échelle AR : ~1–3 cm
 
     const fragMesh = new Mesh(
       new BoxGeometry(fragSize * 2, fragSize * 2, fragSize * 2),
@@ -369,7 +308,7 @@ function breakPiece(piece: Piece) {
   }
 };
 
-// ─── Création de la plateforme ────────────────────────────────────────────────
+// ─── Création de la plateforme ────
 function createPlatform(width: number, height: number, depth: number): Mesh {
   const platformMesh = new Mesh(
     new BoxGeometry(width, height, depth),
@@ -385,6 +324,7 @@ function createPlatform(width: number, height: number, depth: number): Mesh {
   });
 
   physicsWorld.addBody(platformBody);
+
   (platformMesh as any).__physBody = platformBody;
 
   return platformMesh;
@@ -414,6 +354,7 @@ function onSelect() {
     platformPosition.copy(platformMesh.position);
     platformTopY = platformMesh.position.y + PLATFORM_HEIGHT / 2;
 
+    // Sol invisible : placé 0.5 m sous la plateforme pour rattraper les pièces qui tombent
     const FLOOR_OFFSET = 0.5;
     invisibleFloorBody = new Body({
       type: Body.STATIC,
@@ -425,8 +366,11 @@ function onSelect() {
       platformMesh.position.y - FLOOR_OFFSET,
       platformMesh.position.z
     );
+    // Plane est orienté vers le haut par défaut avec Cannon-ES (normale = +Y)
     invisibleFloorBody.quaternion.setFromAxisAngle(new Vec3(1, 0, 0), -Math.PI / 2);
     physicsWorld.addBody(invisibleFloorBody);
+
+
 
     GAME_STATE = 'play';
     scene.remove(reticle);
@@ -463,6 +407,7 @@ function init() {
 
   const geometry = new CylinderGeometry(0.1, 0.1, 0.2, 32).translate(0, 0.1, 0);
 
+
   controller1 = renderer.xr.getController(0);
   controller1.addEventListener('select', onSelect);
   scene.add(controller1);
@@ -480,6 +425,7 @@ function init() {
   scene.add(reticle);
 
   window.addEventListener('resize', onWindowResize);
+
 };
 
 function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSource) => any; }) {
@@ -492,23 +438,32 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
     if (hitTestSourceRequested === false) {
       if (session) {
         session.requestReferenceSpace('viewer').then(function (referenceSpace) {
+
           session.requestHitTestSource?.({ space: referenceSpace })?.then(function (source) {
+
             hitTestSource = source;
+
           });
+
         });
 
         session.addEventListener('end', function () {
+
           hitTestSourceRequested = false;
           hitTestSource = null;
+
         });
 
         hitTestSourceRequested = true;
       }
-    }
 
+
+    }
     if (GAME_STATE == "init") {
       if (hitTestSource) {
+
         const hitTestResults = frame.getHitTestResults(hitTestSource);
+
         if (hitTestResults.length) {
           const hit = hitTestResults[0];
           reticle.visible = true;
@@ -521,13 +476,20 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
 
     if (GAME_STATE === 'play') {
       const now = performance.now();
-      if (lastTime === null) lastTime = now;
+      if (lastTime === null) {
+        lastTime = now;
+      }
       const delta = Math.min((now - lastTime) / 1000, 0.05);
       lastTime = now;
       physicsWorld.step(1 / 60, delta, 3);
 
+      // Sync Three.js meshes to Cannon-ES bodies
       for (const { pieceMesh, physBody } of activePieces) {
-        pieceMesh.position.set(physBody.position.x, physBody.position.y, physBody.position.z);
+        pieceMesh.position.set(
+          physBody.position.x,
+          physBody.position.y,
+          physBody.position.z
+        );
         pieceMesh.quaternion.set(
           physBody.quaternion.x,
           physBody.quaternion.y,
@@ -545,6 +507,7 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
         piecesToBreak = [];
       }
 
+      // Mise à jour et nettoyage des débris
       const currentTimeSec = performance.now() / 1000;
       debris = debris.filter(({ mesh, body, spawnTime }) => {
         const age = currentTimeSec - spawnTime;
@@ -568,10 +531,8 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
     }
   }
 
-  // Update the audio listener to match the XR camera every frame
-  updateAudioListener();
-
   renderer.render(scene, camera);
+
 };
 
 
