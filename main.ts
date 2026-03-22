@@ -120,6 +120,7 @@ physicsWorld.addContactMaterial(piecePieceContact);
 interface Piece {
   pieceMesh: Mesh;
   physBody: Body;
+  hasLanded: boolean;
 }
 
 const activePieces: Piece[] = [];
@@ -241,14 +242,15 @@ function createPiece(config: PieceConfig): Piece {
   physBody.position.set(platformPosition.x, spawnY, platformPosition.z);
   physicsWorld.addBody(physBody);
 
-  const piece: Piece = { pieceMesh, physBody };
+  const piece: Piece = { pieceMesh, physBody, hasLanded: false };
 
   physBody.addEventListener('collide', (event: any) => {
     if (event.body === invisibleFloorBody && !piecesToBreak.includes(piece)) {
       synthManager.play('blockDestruction');
       piecesToBreak.push(piece)
     }
-    else {
+    else if (!piece.hasLanded) {
+      piece.hasLanded = true;
       synthManager.play('blockHit');
     }
   });
