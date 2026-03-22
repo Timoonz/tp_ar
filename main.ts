@@ -61,6 +61,8 @@ let GAME_STATE = 'init';
 let platformPosition = new Vector3();
 let platformTopY = 0;
 
+//─── Sol invisible ──────────────────────────────────────────────────────────────────
+let invisibleFloorBody: Body | null = null;
 
 //─── Monde physique ─────────────────────────────────────────────────────────────────────
 let physicsWorld = new World({
@@ -243,6 +245,22 @@ function onSelect() {
 
     platformPosition.copy(platformMesh.position);
     platformTopY = platformMesh.position.y + PLATFORM_HEIGHT / 2;
+
+    // Sol invisible : placé 0.5 m sous la plateforme pour rattraper les pièces qui tombent
+    const FLOOR_OFFSET = 0.5;
+    invisibleFloorBody = new Body({
+      type: Body.STATIC,
+      material: floorPhysMaterial,
+      shape: new Plane(),
+    });
+    invisibleFloorBody.position.set(
+      platformMesh.position.x,
+      platformMesh.position.y - FLOOR_OFFSET,
+      platformMesh.position.z
+    );
+    // Plane est orienté vers le haut par défaut avec Cannon-ES (normale = +Y)
+    invisibleFloorBody.quaternion.setFromAxisAngle(new Vec3(1, 0, 0), -Math.PI / 2);
+    physicsWorld.addBody(invisibleFloorBody);
 
 
 
