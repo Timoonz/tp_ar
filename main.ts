@@ -63,14 +63,28 @@ let GAME_STATE = 'init';
 const synthManager = new SynthManager();
 
 // Une histoire de contexte audio à remplacer pour zzfx
-const unlockAudio = () => {
-  const ctx = new AudioContext();
-  ctx.resume().then(() => ctx.close());
-  window.removeEventListener('click', unlockAudio);
-  window.removeEventListener('keydown', unlockAudio);
-};
-window.addEventListener('click', unlockAudio);
-window.addEventListener('keydown', unlockAudio);
+let audioUnlocked = false;
+
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+
+  // Résume le contexte interne de zzfx s'il existe déjà
+  const zzfxCtx = (window as any).zzfxX as AudioContext | undefined;
+  if (zzfxCtx && zzfxCtx.state === 'suspended') {
+    zzfxCtx.resume();
+  }
+
+  // Crée un contexte temporaire pour lever le blocage navigateur sur mobile
+  try {
+    const ctx = new AudioContext();
+    ctx.resume().then(() => ctx.close());
+  } catch (_) { }
+}
+
+window.addEventListener('click', unlockAudio, { once: true });
+window.addEventListener('touchstart', unlockAudio, { once: true });
+window.addEventListener('keydown', unlockAudio, { once: true });
 
 //─── Plateforme ─────────────────────────────────────────────────────────────────────
 let platformPosition = new Vector3();
@@ -315,6 +329,8 @@ function createPlatform(width: number, height: number, depth: number): Mesh {
 };
 
 function onSelect() {
+
+  unlockAudio();
 
   if (reticle.visible && GAME_STATE == 'init') {
 
