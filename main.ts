@@ -53,8 +53,7 @@ let controller1, controller2;
 let hitTestSource: XRHitTestSource | null = null;
 let hitTestSourceRequested = false;
 
-const timer = new Timer();
-timer.connect(document);
+let lastTime: number | null = null;
 
 let GAME_STATE = 'init';
 
@@ -351,7 +350,12 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
     }
 
     if (GAME_STATE === 'play') {
-      const delta = Math.min(timer.getDelta(), 0.05); // cap to avoid spiral of death
+      const now = performance.now();
+      if (lastTime === null) {
+        lastTime = now;
+      }
+      const delta = Math.min((now - lastTime) / 1000, 0.05);
+      lastTime = now;
       physicsWorld.step(1 / 60, delta, 3);
 
       // Sync Three.js meshes to Cannon-ES bodies
