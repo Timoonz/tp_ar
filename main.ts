@@ -107,27 +107,27 @@ interface PieceConfig {
 const PIECES: Record<string, PieceConfig> = {
   cube: {
     shape: 'cube',
-    size: 0.2,
+    size: 0.07,
     mass: 1.0,
   },
   cylinder: {
     shape: 'cylinder',
-    size: 0.2,
+    size: 0.07,
     mass: 1.0,
   },
   cone: {
     shape: 'cone',
-    size: 0.2,
+    size: 0.07,
     mass: 1.0,
   },
   bigRect: {
     shape: 'bigRect',
-    size: 0.2,
+    size: 0.07,
     mass: 2.0,
   },
   thinRect: {
     shape: 'thinRect',
-    size: 0.2,
+    size: 0.07,
     mass: 0.8,
   },
 }
@@ -173,7 +173,7 @@ function buildPhysicsShape(config: PieceConfig) {
 
 
 function createPiece(config: PieceConfig): Piece {
-  const spawnY = platformTopY + pieceHalfHeight(config) + 0.05; // small gap so it falls onto the surface
+  const spawnY = platformTopY + pieceHalfHeight(config) + 0.4;
 
   // mesh Three.js 
   const pieceMesh = new Mesh(
@@ -384,5 +384,4 @@ function onWindowResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-
 }
