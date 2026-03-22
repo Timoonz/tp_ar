@@ -62,20 +62,105 @@ let GAME_STATE = 'init';
 // ─── Audio ───────────────────────────────────────────────
 const synthManager = new SynthManager();
 
-// Une histoire de contexte audio à remplacer pour zzfx
 let audioUnlocked = false;
+
+// AudioContext partagé — sera créé/repris lors du premier geste utilisateur
+let audioCtx: AudioContext | null = null;
+
+function getAudioContext(): AudioContext {
+  if (!audioCtx) {
+    // Réutilise le contexte zzfx s'il est déjà instancié
+    const zzfxCtx = (window as any).zzfxX as AudioContext | undefined;
+    audioCtx = zzfxCtx ?? new AudioContext();
+  }
+  return audioCtx;
+}
+
+/**
+ * Crée un PannerNode configuré pour une spatialisation réaliste, positionné
+ * aux coordonnées 3D du point de collision, puis connecte la source fournie
+ * dessus avant de router vers la destination du contexte.
+ *
+ * @param position  Position monde du corps physique au moment du son
+ * @param connectSource  Callback qui reçoit le PannerNode pour y brancher la source audio
+ */
+function playSpatializedSound(
+  position: { x: number; y: number; z: number },
+  connectSource: (panner: PannerNode) => void
+): void {
+  const ctx = getAudioContext();
+  if (ctx.state === 'suspended') ctx.resume();
+
+  const panner = ctx.createPanner();
+
+  // Modèle de distance HRTF pour un rendu binaural réaliste
+  panner.panningModel = 'HRTF';
+  panner.distanceModel = 'inverse';
+  panner.refDistance = 0.5;    // distance de référence en mètres (espace AR ~50 cm)
+  panner.maxDistance = 10;
+  panner.rolloffFactor = 1.5;
+  panner.coneInnerAngle = 360; // source omnidirectionnelle
+  panner.coneOuterAngle = 360;
+  panner.coneOuterGain = 0;
+
+  // Position de la source sonore dans l'espace monde
+  panner.positionX.setValueAtTime(position.x, ctx.currentTime);
+  panner.positionY.setValueAtTime(position.y, ctx.currentTime);
+  panner.positionZ.setValueAtTime(position.z, ctx.currentTime);
+
+  panner.connect(ctx.destination);
+
+  // Le callback branche la source audio (OscillatorNode, BufferSourceNode…)
+  // sur ce panner
+  connectSource(panner);
+}
+
+/**
+ * Met à jour la position et l'orientation de l'AudioListener chaque frame
+ * pour qu'elles reflètent la caméra XR.
+ */
+function updateAudioListener(): void {
+  if (!audioCtx) return;
+
+  const listener = audioCtx.listener;
+
+  // Position de la caméra dans le monde
+  const pos = new Vector3();
+  camera.getWorldPosition(pos);
+
+  // Vecteur "vers l'avant" de la caméra
+  const forward = new Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  // Vecteur "vers le haut" de la caméra
+  const up = new Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+
+  if (listener.positionX) {
+    // API moderne
+    const t = audioCtx.currentTime;
+    listener.positionX.setValueAtTime(pos.x, t);
+    listener.positionY.setValueAtTime(pos.y, t);
+    listener.positionZ.setValueAtTime(pos.z, t);
+    listener.forwardX.setValueAtTime(forward.x, t);
+    listener.forwardY.setValueAtTime(forward.y, t);
+    listener.forwardZ.setValueAtTime(forward.z, t);
+    listener.upX.setValueAtTime(up.x, t);
+    listener.upY.setValueAtTime(up.y, t);
+    listener.upZ.setValueAtTime(up.z, t);
+  } else {
+    // API legacy (fallback)
+    listener.setPosition(pos.x, pos.y, pos.z);
+    listener.setOrientation(forward.x, forward.y, forward.z, up.x, up.y, up.z);
+  }
+}
 
 function unlockAudio() {
   if (audioUnlocked) return;
   audioUnlocked = true;
 
-  // Résume le contexte interne de zzfx s'il existe déjà
   const zzfxCtx = (window as any).zzfxX as AudioContext | undefined;
   if (zzfxCtx && zzfxCtx.state === 'suspended') {
     zzfxCtx.resume();
   }
 
-  // Crée un contexte temporaire pour lever le blocage navigateur sur mobile
   try {
     const ctx = new AudioContext();
     ctx.resume().then(() => ctx.close());
@@ -530,6 +615,8 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
       });
     }
   }
+
+  updateAudioListener();
 
   renderer.render(scene, camera);
 
