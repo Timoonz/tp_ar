@@ -95,6 +95,21 @@ interface Piece {
 
 const activePieces: Piece[] = [];
 
+
+//─── Gestion des débris ─────────────────────────────────────────────────────────────────────
+const DEBRIS_COUNT = 6;
+const DEBRIS_LIFETIME = 4;
+const FADE_START = DEBRIS_LIFETIME * 0.5;
+
+interface DebrisPiece {
+  mesh: Mesh;
+  body: Body;
+  spawnTime: number;
+}
+
+let piecesToBreak: Piece[] = [];
+let debris: DebrisPiece[] = [];
+
 //─── Pièces ─────────────────────────────────────────────────────────────────────
 
 type PieceShape = "cube" | "cylinder" | "cone" | "bigRect" | "thinRect";
@@ -172,7 +187,7 @@ function buildPhysicsShape(config: PieceConfig) {
   }
 };
 
-
+// ─── Création de pièce ────
 function createPiece(config: PieceConfig): Piece {
   const spawnY = platformTopY + pieceHalfHeight(config) + 0.4;
 
@@ -198,9 +213,65 @@ function createPiece(config: PieceConfig): Piece {
   physicsWorld.addBody(physBody);
 
   const piece: Piece = { pieceMesh, physBody };
+
+  physBody.addEventListener('collide', (event: any) => {
+    if (event.body === invisibleFloorBody && !piecesToBreak.includes(piece)) {
+      piecesToBreak.push(piece);
+    }
+  });
+
   activePieces.push(piece);
   return piece;
 }
+
+// ─── Cassage de pièce ────
+function breakPiece(piece: Piece) {
+  const pos = piece.physBody.position;
+  const vel = piece.physBody.velocity;
+  const color = (piece.pieceMesh.material as MeshStandardMaterial).color.getHex();
+
+  scene.remove(piece.pieceMesh);
+  physicsWorld.removeBody(piece.physBody);
+
+  for (let i = 0; i < DEBRIS_COUNT; i++) {
+    const fragSize = (0.01 + Math.random() * 0.02); // échelle AR : ~1–3 cm
+
+    const fragMesh = new Mesh(
+      new BoxGeometry(fragSize * 2, fragSize * 2, fragSize * 2),
+      new MeshStandardMaterial({ color, roughness: 1.0, transparent: true, opacity: 1.0 })
+    );
+    scene.add(fragMesh);
+
+    const fragBody = new Body({
+      mass: 0.05,
+      shape: new Box(new Vec3(fragSize, fragSize, fragSize)),
+      linearDamping: 0.4,
+      angularDamping: 0.4,
+    });
+
+    fragBody.position.set(
+      pos.x + (Math.random() - 0.5) * 0.06,
+      pos.y + (Math.random() - 0.5) * 0.03,
+      pos.z + (Math.random() - 0.5) * 0.06,
+    );
+
+    const spread = 0.15;
+    fragBody.velocity.set(
+      vel.x * 0.3 + (Math.random() - 0.5) * spread,
+      Math.random() * 0.1,
+      vel.z * 0.3 + (Math.random() - 0.5) * spread,
+    );
+
+    fragBody.angularVelocity.set(
+      (Math.random() - 0.5) * 12,
+      (Math.random() - 0.5) * 12,
+      (Math.random() - 0.5) * 12,
+    );
+
+    physicsWorld.addBody(fragBody);
+    debris.push({ mesh: fragMesh, body: fragBody, spawnTime: performance.now() / 1000 });
+  }
+};
 
 // ─── Création de la plateforme ────
 function createPlatform(width: number, height: number, depth: number): Mesh {
@@ -222,7 +293,7 @@ function createPlatform(width: number, height: number, depth: number): Mesh {
   (platformMesh as any).__physBody = platformBody;
 
   return platformMesh;
-}
+};
 
 function onSelect() {
 
@@ -273,8 +344,7 @@ function onSelect() {
     currentPiece = keys[Math.floor(Math.random() * keys.length)];
     createPiece(PIECES[currentPiece]);
   }
-
-}
+};
 
 function init() {
 
@@ -390,8 +460,38 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
           physBody.quaternion.w
         );
       }
-    }
 
+      if (piecesToBreak.length > 0) {
+        piecesToBreak.forEach(piece => {
+          const idx = activePieces.indexOf(piece);
+          if (idx !== -1) activePieces.splice(idx, 1);
+          breakPiece(piece);
+        });
+        piecesToBreak = [];
+      }
+
+      // Mise à jour et nettoyage des débris
+      const currentTimeSec = performance.now() / 1000;
+      debris = debris.filter(({ mesh, body, spawnTime }) => {
+        const age = currentTimeSec - spawnTime;
+
+        if (age >= DEBRIS_LIFETIME) {
+          scene.remove(mesh);
+          physicsWorld.removeBody(body);
+          return false;
+        }
+
+        mesh.position.set(body.position.x, body.position.y, body.position.z);
+        mesh.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+
+        if (age > FADE_START) {
+          const opacity = 1 - (age - FADE_START) / (DEBRIS_LIFETIME - FADE_START);
+          (mesh.material as MeshStandardMaterial).opacity = opacity;
+        }
+
+        return true;
+      });
+    }
   }
 
   renderer.render(scene, camera);
