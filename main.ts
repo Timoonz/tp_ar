@@ -56,6 +56,7 @@ let hitTestSource: XRHitTestSource | null = null;
 let hitTestSourceRequested = false;
 
 let lastTime: number | null = null;
+let lastHitPosition: Vector3 | null = null;
 
 let GAME_STATE = 'init';
 
@@ -218,7 +219,9 @@ function buildPhysicsShape(config: PieceConfig) {
 };
 
 // ─── Création de pièce ────
-function createPiece(config: PieceConfig): Piece {
+function createPiece(config: PieceConfig, spawnPos?: Vector3): Piece {
+  const x = spawnPos?.x ?? platformPosition.x;
+  const z = spawnPos?.z ?? platformPosition.z;
   const spawnY = platformTopY + pieceHalfHeight(config) + 0.4;
 
   // mesh Three.js 
@@ -227,7 +230,7 @@ function createPiece(config: PieceConfig): Piece {
     new MeshStandardMaterial({ color: 0x8e44ad })
   );
   pieceMesh.castShadow = true;
-  pieceMesh.position.set(platformPosition.x, spawnY, platformPosition.z);
+  pieceMesh.position.set(x, spawnY, z);
   scene.add(pieceMesh);
 
   // bidy Cannon-ES 
@@ -239,7 +242,7 @@ function createPiece(config: PieceConfig): Piece {
     linearDamping: 0.1,
     angularDamping: 0.1,
   });
-  physBody.position.set(platformPosition.x, spawnY, platformPosition.z);
+  physBody.position.set(x, spawnY, z);
   physicsWorld.addBody(physBody);
 
   const piece: Piece = { pieceMesh, physBody, hasLanded: false };
@@ -379,7 +382,7 @@ function onSelect() {
   else if (GAME_STATE == 'play') {
     const keys = Object.keys(PIECES);
     currentPiece = keys[Math.floor(Math.random() * keys.length)];
-    createPiece(PIECES[currentPiece]);
+    createPiece(PIECES[currentPiece], lastHitPosition ?? undefined);
   }
 };
 
@@ -459,18 +462,23 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
 
 
     }
-    if (GAME_STATE == "init") {
-      if (hitTestSource) {
+    if (hitTestSource) {
+      const hitTestResults = frame.getHitTestResults(hitTestSource);
 
-        const hitTestResults = frame.getHitTestResults(hitTestSource);
+      if (hitTestResults.length) {
+        const hit = hitTestResults[0];
+        const hitMatrix = hit.getPose(referenceSpace).transform.matrix;
 
-        if (hitTestResults.length) {
-          const hit = hitTestResults[0];
+        // Always track the latest surface hit for block spawning
+        if (!lastHitPosition) lastHitPosition = new Vector3();
+        lastHitPosition.set(hitMatrix[12], hitMatrix[13], hitMatrix[14]);
+
+        if (GAME_STATE === 'init') {
           reticle.visible = true;
-          reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
-        } else {
-          reticle.visible = false;
+          reticle.matrix.fromArray(hitMatrix);
         }
+      } else {
+        if (GAME_STATE === 'init') reticle.visible = false;
       }
     }
 
