@@ -279,7 +279,7 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
 
 
     }
-    if (GAME_STATE != "init") {
+    if (GAME_STATE == "init") {
       if (hitTestSource) {
 
         const hitTestResults = frame.getHitTestResults(hitTestSource);
