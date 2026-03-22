@@ -38,9 +38,6 @@ import { ARButton } from 'three/addons/webxr/ARButton.js';
 
 import { SynthManager } from "./src/SynthManager";
 
-// Example of hard link to official repo for data, if needed
-// const MODEL_PATH = 'https://raw.githubusercontent.com/mrdoob/three.js/r173/examples/models/gltf/LeePerrySmith/LeePerrySmith.glb';
-
 let container;
 
 // ─── Caméra / scène / renderer ───────────────────────────────────────────────
@@ -64,78 +61,63 @@ const synthManager = new SynthManager();
 
 let audioUnlocked = false;
 
-// AudioContext partagé — sera créé/repris lors du premier geste utilisateur
-let audioCtx: AudioContext | null = null;
+// ─── Spatialisation audio ─────────────────────────────────────────────────────
 
-function getAudioContext(): AudioContext {
-  if (!audioCtx) {
-    // Réutilise le contexte zzfx s'il est déjà instancié
-    const zzfxCtx = (window as any).zzfxX as AudioContext | undefined;
-    audioCtx = zzfxCtx ?? new AudioContext();
-  }
-  return audioCtx;
+/**
+ * Returns zzfx's AudioContext (zzfxX), waiting until zzfx has created it.
+ * We must never create a second AudioContext — the panner and the zzfx gain
+ * node must live in the same context or the routing has no effect.
+ */
+function getZzfxContext(): AudioContext | null {
+  return (window as any).zzfxX as AudioContext | null ?? null;
 }
 
 /**
- * Crée un PannerNode configuré pour une spatialisation réaliste, positionné
- * aux coordonnées 3D du point de collision, puis connecte la source fournie
- * dessus avant de router vers la destination du contexte.
- *
- * @param position  Position monde du corps physique au moment du son
- * @param connectSource  Callback qui reçoit le PannerNode pour y brancher la source audio
+ * Creates a PannerNode in zzfx's AudioContext, positioned at the given world
+ * coordinates, connected to ctx.destination.
+ * Returns null if the context isn't ready yet.
  */
-function playSpatializedSound(
-  position: { x: number; y: number; z: number },
-  connectSource: (panner: PannerNode) => void
-): void {
-  const ctx = getAudioContext();
-  if (ctx.state === 'suspended') ctx.resume();
+function createPannerAt(position: { x: number; y: number; z: number }): PannerNode | null {
+  const ctx = getZzfxContext();
+  if (!ctx) return null;
 
   const panner = ctx.createPanner();
-
-  // Modèle de distance HRTF pour un rendu binaural réaliste
   panner.panningModel = 'HRTF';
   panner.distanceModel = 'inverse';
-  panner.refDistance = 0.5;    // distance de référence en mètres (espace AR ~50 cm)
+  panner.refDistance = 0.5;   // ~50 cm reference distance, appropriate for AR tabletop scale
   panner.maxDistance = 10;
   panner.rolloffFactor = 1.5;
-  panner.coneInnerAngle = 360; // source omnidirectionnelle
+  panner.coneInnerAngle = 360; // omnidirectional source
   panner.coneOuterAngle = 360;
   panner.coneOuterGain = 0;
 
-  // Position de la source sonore dans l'espace monde
   panner.positionX.setValueAtTime(position.x, ctx.currentTime);
   panner.positionY.setValueAtTime(position.y, ctx.currentTime);
   panner.positionZ.setValueAtTime(position.z, ctx.currentTime);
 
   panner.connect(ctx.destination);
-
-  // Le callback branche la source audio (OscillatorNode, BufferSourceNode…)
-  // sur ce panner
-  connectSource(panner);
+  return panner;
 }
 
 /**
- * Met à jour la position et l'orientation de l'AudioListener chaque frame
- * pour qu'elles reflètent la caméra XR.
+ * Syncs the AudioListener position and orientation to the camera every frame.
+ * Must be called in the render loop after the XR camera has been updated.
  */
 function updateAudioListener(): void {
-  if (!audioCtx) return;
+  const ctx = getZzfxContext();
+  if (!ctx) return;
 
-  const listener = audioCtx.listener;
+  const listener = ctx.listener;
 
-  // Position de la caméra dans le monde
   const pos = new Vector3();
   camera.getWorldPosition(pos);
 
-  // Vecteur "vers l'avant" de la caméra
   const forward = new Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-  // Vecteur "vers le haut" de la caméra
   const up = new Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
 
   if (listener.positionX) {
-    // API moderne
-    const t = audioCtx.currentTime;
+    // Modern API
+    const t = ctx.currentTime;
     listener.positionX.setValueAtTime(pos.x, t);
     listener.positionY.setValueAtTime(pos.y, t);
     listener.positionZ.setValueAtTime(pos.z, t);
@@ -146,9 +128,9 @@ function updateAudioListener(): void {
     listener.upY.setValueAtTime(up.y, t);
     listener.upZ.setValueAtTime(up.z, t);
   } else {
-    // API legacy (fallback)
-    listener.setPosition(pos.x, pos.y, pos.z);
-    listener.setOrientation(forward.x, forward.y, forward.z, up.x, up.y, up.z);
+    // Legacy fallback
+    (listener as any).setPosition(pos.x, pos.y, pos.z);
+    (listener as any).setOrientation(forward.x, forward.y, forward.z, up.x, up.y, up.z);
   }
 }
 
@@ -187,14 +169,12 @@ let physicsWorld = new World({
 const floorPhysMaterial = new Material('floor');
 const pieceMaterial = new Material('piece');
 
-// Friction/restitution entre les pièces et la plateforme
 const pieceFloorContact = new ContactMaterial(floorPhysMaterial, pieceMaterial, {
   friction: 0.6,
   restitution: 0.1,
 });
 physicsWorld.addContactMaterial(pieceFloorContact);
 
-// Friction/restitution entre les pièces
 const piecePieceContact = new ContactMaterial(pieceMaterial, pieceMaterial, {
   friction: 0.6,
   restitution: 0.05,
@@ -236,35 +216,14 @@ interface PieceConfig {
 }
 
 const PIECES: Record<string, PieceConfig> = {
-  cube: {
-    shape: 'cube',
-    size: 0.07,
-    mass: 1.0,
-  },
-  cylinder: {
-    shape: 'cylinder',
-    size: 0.07,
-    mass: 1.0,
-  },
-  cone: {
-    shape: 'cone',
-    size: 0.07,
-    mass: 1.0,
-  },
-  bigRect: {
-    shape: 'bigRect',
-    size: 0.07,
-    mass: 2.0,
-  },
-  thinRect: {
-    shape: 'thinRect',
-    size: 0.07,
-    mass: 0.8,
-  },
+  cube: { shape: 'cube', size: 0.07, mass: 1.0 },
+  cylinder: { shape: 'cylinder', size: 0.07, mass: 1.0 },
+  cone: { shape: 'cone', size: 0.07, mass: 1.0 },
+  bigRect: { shape: 'bigRect', size: 0.07, mass: 2.0 },
+  thinRect: { shape: 'thinRect', size: 0.07, mass: 0.8 },
 }
 
 let currentPiece: keyof typeof PIECES = 'cylinder';
-
 
 // ─── Helper: build Three.js geometry from config ──────────────────────────────
 function buildGeometry(config: PieceConfig): BufferGeometry {
@@ -296,17 +255,16 @@ function buildPhysicsShape(config: PieceConfig) {
   switch (config.shape) {
     case 'cube': return new Box(new Vec3(s, s, s));
     case 'cylinder': return new Cylinder(s, s, s * 2, 16);
-    case 'cone': return new Cylinder(0.01, s, s * 2, 16); // cannon-es doesn't support radius 0
+    case 'cone': return new Cylinder(0.01, s, s * 2, 16);
     case 'bigRect': return new Box(new Vec3(s * 2, s * 0.75, s));
     case 'thinRect': return new Box(new Vec3(s * 0.25, s * 1.5, s));
   }
 };
 
-// ─── Création de pièce ────
+// ─── Création de pièce ────────────────────────────────────────────────────────
 function createPiece(config: PieceConfig): Piece {
   const spawnY = platformTopY + pieceHalfHeight(config) + 0.4;
 
-  // mesh Three.js 
   const pieceMesh = new Mesh(
     buildGeometry(config),
     new MeshStandardMaterial({ color: 0x8e44ad })
@@ -315,7 +273,6 @@ function createPiece(config: PieceConfig): Piece {
   pieceMesh.position.set(platformPosition.x, spawnY, platformPosition.z);
   scene.add(pieceMesh);
 
-  // bidy Cannon-ES 
   const physBody = new Body({
     mass: config.mass,
     type: Body.DYNAMIC,
@@ -330,13 +287,32 @@ function createPiece(config: PieceConfig): Piece {
   const piece: Piece = { pieceMesh, physBody, hasLanded: false };
 
   physBody.addEventListener('collide', (event: any) => {
+    // Snapshot position at the moment of collision
+    const collisionPos = {
+      x: physBody.position.x,
+      y: physBody.position.y,
+      z: physBody.position.z,
+    };
+
     if (event.body === invisibleFloorBody && !piecesToBreak.includes(piece)) {
-      synthManager.play('blockDestruction');
-      piecesToBreak.push(piece)
-    }
-    else if (!piece.hasLanded) {
+      // Destruction sound spatialized from the piece's world position
+      const panner = createPannerAt(collisionPos);
+      if (panner) {
+        synthManager.playSpatialized('blockDestruction', panner);
+      } else {
+        synthManager.play('blockDestruction'); // fallback if ctx not ready
+      }
+      piecesToBreak.push(piece);
+
+    } else if (!piece.hasLanded) {
       piece.hasLanded = true;
-      synthManager.play('blockHit');
+      // Landing sound spatialized from the piece's world position
+      const panner = createPannerAt(collisionPos);
+      if (panner) {
+        synthManager.playSpatialized('blockHit', panner);
+      } else {
+        synthManager.play('blockHit'); // fallback if ctx not ready
+      }
     }
   });
 
@@ -344,7 +320,7 @@ function createPiece(config: PieceConfig): Piece {
   return piece;
 }
 
-// ─── Cassage de pièce ────
+// ─── Cassage de pièce ─────────────────────────────────────────────────────────
 function breakPiece(piece: Piece) {
   const pos = piece.physBody.position;
   const vel = piece.physBody.velocity;
@@ -354,7 +330,7 @@ function breakPiece(piece: Piece) {
   physicsWorld.removeBody(piece.physBody);
 
   for (let i = 0; i < DEBRIS_COUNT; i++) {
-    const fragSize = (0.01 + Math.random() * 0.02); // échelle AR : ~1–3 cm
+    const fragSize = (0.01 + Math.random() * 0.02);
 
     const fragMesh = new Mesh(
       new BoxGeometry(fragSize * 2, fragSize * 2, fragSize * 2),
@@ -393,7 +369,7 @@ function breakPiece(piece: Piece) {
   }
 };
 
-// ─── Création de la plateforme ────
+// ─── Création de la plateforme ────────────────────────────────────────────────
 function createPlatform(width: number, height: number, depth: number): Mesh {
   const platformMesh = new Mesh(
     new BoxGeometry(width, height, depth),
@@ -409,7 +385,6 @@ function createPlatform(width: number, height: number, depth: number): Mesh {
   });
 
   physicsWorld.addBody(platformBody);
-
   (platformMesh as any).__physBody = platformBody;
 
   return platformMesh;
@@ -439,7 +414,6 @@ function onSelect() {
     platformPosition.copy(platformMesh.position);
     platformTopY = platformMesh.position.y + PLATFORM_HEIGHT / 2;
 
-    // Sol invisible : placé 0.5 m sous la plateforme pour rattraper les pièces qui tombent
     const FLOOR_OFFSET = 0.5;
     invisibleFloorBody = new Body({
       type: Body.STATIC,
@@ -451,11 +425,8 @@ function onSelect() {
       platformMesh.position.y - FLOOR_OFFSET,
       platformMesh.position.z
     );
-    // Plane est orienté vers le haut par défaut avec Cannon-ES (normale = +Y)
     invisibleFloorBody.quaternion.setFromAxisAngle(new Vec3(1, 0, 0), -Math.PI / 2);
     physicsWorld.addBody(invisibleFloorBody);
-
-
 
     GAME_STATE = 'play';
     scene.remove(reticle);
@@ -492,7 +463,6 @@ function init() {
 
   const geometry = new CylinderGeometry(0.1, 0.1, 0.2, 32).translate(0, 0.1, 0);
 
-
   controller1 = renderer.xr.getController(0);
   controller1.addEventListener('select', onSelect);
   scene.add(controller1);
@@ -510,7 +480,6 @@ function init() {
   scene.add(reticle);
 
   window.addEventListener('resize', onWindowResize);
-
 };
 
 function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSource) => any; }) {
@@ -523,32 +492,23 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
     if (hitTestSourceRequested === false) {
       if (session) {
         session.requestReferenceSpace('viewer').then(function (referenceSpace) {
-
           session.requestHitTestSource?.({ space: referenceSpace })?.then(function (source) {
-
             hitTestSource = source;
-
           });
-
         });
 
         session.addEventListener('end', function () {
-
           hitTestSourceRequested = false;
           hitTestSource = null;
-
         });
 
         hitTestSourceRequested = true;
       }
-
-
     }
+
     if (GAME_STATE == "init") {
       if (hitTestSource) {
-
         const hitTestResults = frame.getHitTestResults(hitTestSource);
-
         if (hitTestResults.length) {
           const hit = hitTestResults[0];
           reticle.visible = true;
@@ -561,20 +521,13 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
 
     if (GAME_STATE === 'play') {
       const now = performance.now();
-      if (lastTime === null) {
-        lastTime = now;
-      }
+      if (lastTime === null) lastTime = now;
       const delta = Math.min((now - lastTime) / 1000, 0.05);
       lastTime = now;
       physicsWorld.step(1 / 60, delta, 3);
 
-      // Sync Three.js meshes to Cannon-ES bodies
       for (const { pieceMesh, physBody } of activePieces) {
-        pieceMesh.position.set(
-          physBody.position.x,
-          physBody.position.y,
-          physBody.position.z
-        );
+        pieceMesh.position.set(physBody.position.x, physBody.position.y, physBody.position.z);
         pieceMesh.quaternion.set(
           physBody.quaternion.x,
           physBody.quaternion.y,
@@ -592,7 +545,6 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
         piecesToBreak = [];
       }
 
-      // Mise à jour et nettoyage des débris
       const currentTimeSec = performance.now() / 1000;
       debris = debris.filter(({ mesh, body, spawnTime }) => {
         const age = currentTimeSec - spawnTime;
@@ -616,10 +568,10 @@ function animate(_timestamp: any, frame: { getHitTestResults: (arg0: XRHitTestSo
     }
   }
 
+  // Update the audio listener to match the XR camera every frame
   updateAudioListener();
 
   renderer.render(scene, camera);
-
 };
 
 

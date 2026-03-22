@@ -43,17 +43,50 @@ export class SynthManager {
         }
     };
 
-    play(effect: SoundEffect): void {
-        if (this.muted) return;
+    private buildParams(effect: SoundEffect): ZzfxParams | null {
+        if (this.muted) return null;
 
         const config = this.sounds.get(effect);
-        if (!config) return;
+        if (!config) return null;
 
         const adjustedParams = [...config.params];
         const effectVolume = config.volume ?? 1.0;
         adjustedParams[0] = effectVolume * this.globalVolume;
 
-        zzfx(...adjustedParams);
+        return adjustedParams;
+    }
+
+    play(effect: SoundEffect): void {
+        const params = this.buildParams(effect);
+        if (!params) return;
+        zzfx(...params);
+    };
+
+    /**
+     * Plays a sound routed through a PannerNode for 3D spatialization.
+     *
+     * zzfx internally connects its output GainNode straight to ctx.destination.
+     * This method intercepts that GainNode, disconnects it from destination,
+     * and reconnects it through the provided panner instead.
+     *
+     * The panner must already be connected to ctx.destination before calling this.
+     */
+    playSpatialized(effect: SoundEffect, panner: PannerNode): void {
+        const params = this.buildParams(effect);
+        if (!params) return;
+
+        // zzfx returns the GainNode at the end of its internal audio chain,
+        // already wired to zzfxX.destination
+        const gainNode = zzfx(...params) as GainNode | undefined;
+
+        if (!gainNode) {
+            // zzfx returned nothing (some environments / muted state) — silent fallback
+            return;
+        }
+
+        // Cut the direct-to-destination connection, reroute through the panner
+        gainNode.disconnect();
+        gainNode.connect(panner);
     };
 
     toggleMute(): boolean {
@@ -70,4 +103,3 @@ export class SynthManager {
     };
 
 }
-
